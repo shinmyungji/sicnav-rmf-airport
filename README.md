@@ -1,6 +1,9 @@
 # SICNav Social Navigation in RMF Airport
 
 <p align="center">
+  <img src="assets/airport_tb4_demo.gif" width="900">
+</p>
+<p align="center">
   <b>Open-RMF Airport · Crowd Simulation · TurtleBot4 · Gazebo Harmonic</b><br>
   Social Navigation Environment for SICNav-Diffusion Integration
 </p>
