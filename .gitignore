@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+
+.vscode/
+.idea/
+
+build/
+install/
+log/
+
+*.swp
+*~

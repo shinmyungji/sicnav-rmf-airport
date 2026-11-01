@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.8)
+
+project(sicnav_airport_bringup)
+
+find_package(ament_cmake REQUIRED)
+
+install(
+  DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(
+  PROGRAMS
+    scripts/controller_bootstrap.sh
+  DESTINATION share/${PROJECT_NAME}/scripts
+)
+
+ament_package()
