@@ -38,9 +38,42 @@ SICNav Controller
 TurtleBot4
 ```
 
-현재 단계에서는 **Airport + Crowd + TurtleBot4 simulation environment 구축 및 robot control validation** 완료.
+현재 단계에서는 **Airport + Crowd + TurtleBot4 환경 구축을 넘어, Gazebo GT state → persistent JMID → SICNav/Acados one-shot solve까지 연결**된 상태다. 실시간 Acados branch는 검증 완료했으며, closed-loop 10 Hz 제어 연결을 진행 중이다.
 
 ---
+
+
+## ✅ Current Integration Status — 2026-11-05
+
+현재 검증된 핵심 파이프라인:
+
+```text
+RMF Airport / Gazebo Harmonic
+        ↓
+Atomic Human + Robot State Frame
+        ↓
+Persistent JMID Joint Prediction
+        ↓
+Synchronized state(t) + JMID forecast
+        ↓
+SICNav ORCA-KKT MPC
+        ↓
+Acados real-time branch
+```
+
+- Gazebo simulation time 기준 **0.25 s synchronized state frame** 검증
+- 3 pedestrian + TurtleBot4 state를 하나의 atomic frame으로 전달
+- JMID joint prediction과 정확히 같은 `humans_t0 / robot_t0`를 SICNav에 전달
+- SICNav-Diffusion real-time configuration 적용
+  - `outdoor_robot_setting = True`
+  - `MPCEnv isSim = False`
+  - controller rate `10 Hz`
+  - 3 humans + MID/JMID 기준 Acados **SQP 4 / QP 5**
+- 실제 live solve time 약 **81 ms** 확인
+- `/cmd_vel_unstamped` 출력은 안정성 검증 전까지 의도적으로 비활성화
+
+현재 남은 핵심 문제는 **10 Hz closed-loop prediction/control scheduling과 solver convergence 안정성**이다. 공개 repository에는 논문 실제 로봇의 ROS deployment glue가 완전하게 포함되어 있지 않아, 공개된 JMID/SICNav 알고리즘 코드는 유지하면서 RMF/Gazebo ↔ SICNav 연결부만 별도 adapter로 구현 중이다.
+
 
 ## 🎯 Project Goal
 
@@ -554,40 +587,40 @@ airport_tb4.launch.py
 현재 구현 범위:
 
 ```text
-RMF Airport
-    ↓
-Crowd Simulation
-    ↓
-TurtleBot4 Spawn
-    ↓
-ROS2 Control
-    ↓
-diffdrive_controller
-    ↓
-Teleoperation
+RMF Airport / Crowd Simulation
+        ↓
+TurtleBot4 + Gazebo GT State
+        ↓
+/sicnav/state_frame
+        ↓
+Persistent JMID Worker
+        ↓
+Joint Human Future Prediction
+        ↓
+SICNav ORCA / KKT / MPC
+        ↓
+Acados Real-time Solve
+        ↓
+[v, ω]
 ```
 
-다음 integration 단계:
+현재는 solver 출력까지 검증 완료했으며, **robot command publishing은 비활성화 상태**다.
+
+다음 단계:
 
 ```text
-Crowd Agent GT Pose
+Paper-aligned 10 Hz prediction/control loop
         ↓
-Human Trajectory Buffer
+Warm-start / convergence validation
         ↓
-JMID
+/cmd_vel_unstamped
         ↓
-Joint Future Prediction
-        ↓
-SICNav
-        ↓
-TurtleBot4
+Closed-loop TurtleBot4 social navigation
 ```
-
----
 
 ## 🧠 JMID Integration
 
-JMID는 pedestrian history를 이용해 다중 보행자의 future trajectory를 joint하게 prediction.
+JMID는 pedestrian history를 이용해 다중 보행자의 future trajectory를 joint하게 prediction하며, 현재 persistent worker 형태로 Gazebo synchronized state와 연결되어 있다.
 
 예정 pipeline:
 
@@ -611,7 +644,7 @@ Human Intended Motion
 
 ## 🧭 SICNav Integration
 
-JMID prediction을 SICNav controller와 연결.
+JMID prediction을 SICNav controller와 연결했으며, synchronized current state와 joint prediction을 같은 시점 기준으로 Acados MPC에 전달한다.
 
 예정 구조:
 
@@ -705,39 +738,33 @@ RGB-D Tracking Human State
 
 ## 🎯 Future Work
 
-- Gazebo crowd Ground Truth extraction
-- Human trajectory buffer
-- JMID ROS2 integration
-- SICNav controller integration
-- Closed-loop TurtleBot4 navigation
+- 논문 조건에 맞춘 10 Hz prediction / controller scheduling 검증
+- Acados 4/5 real-time branch의 closed-loop convergence 안정성 검증
+- `/cmd_vel_unstamped` 연결 및 TurtleBot4 closed-loop navigation
 - Nav2 global path integration
-- RGB-D human detection
-- Multi-object tracking
-- Map-frame human state estimation
-- GT vs perception comparison
-- Crowd density experiments
-- Social navigation performance evaluation
+- RGB-D human detection / tracking
+- GT vs perception 기반 social navigation 비교
 
 ---
 
 ## 📌 Status
 
 ```text
-RMF Airport Environment        ✅
-Crowd Simulation               ✅
-TurtleBot4 Spawn               ✅
-Gazebo / ROS Clock Bridge      ✅
-ROS2 Control                   ✅
-diffdrive_controller           ✅
-TurtleBot4 Teleoperation       ✅
+RMF Airport Environment              ✅
+Crowd Simulation                     ✅
+TurtleBot4 Spawn / ROS2 Control      ✅
+Crowd + Robot GT State Extraction    ✅
+Atomic Synchronized State Frame      ✅
+Persistent JMID Integration          ✅
+SICNav ORCA-KKT Integration          ✅
+Acados Real-time 4/5 Branch          ✅
+Live Solve < 0.1 s                   ✅  (~81 ms)
 
-Integrated Bringup             🚧
-Crowd GT State Extraction      🚧
-JMID Integration               ⏳
-SICNav Integration             ⏳
-Nav2 Integration               ⏳
-RGB-D Human Tracking           ⏳
-Closed-loop Social Navigation  ⏳
+10 Hz Closed-loop Scheduling         🚧
+Solver Convergence Validation        🚧
+/cmd_vel_unstamped Integration       ⏳
+Closed-loop Social Navigation        ⏳
+RGB-D Human Tracking                 ⏳
 ```
 
 ---
