@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<package format="3">
+
+  <name>sicnav_state_reader</name>
+
+  <version>0.0.1</version>
+
+  <description>
+    Gazebo actor and TurtleBot4 state reader for SICNav
+  </description>
+
+  <maintainer email="user@example.com">
+    qwer1234
+  </maintainer>
+
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+
+  <depend>gz_sim_vendor</depend>
+  <depend>gz_plugin_vendor</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+
+</package>

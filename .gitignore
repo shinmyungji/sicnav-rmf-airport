@@ -12,3 +12,23 @@ log/
 
 *.swp
 *~
+
+# SICNav integration generated files
+__pycache__/
+*.pyc
+*.pyo
+*.before_*
+*.backup
+*.log
+
+# Acados generated solver/cache
+acados_cache/
+c_generated_code_*/
+
+# Models / large data
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.npy
+*.npz

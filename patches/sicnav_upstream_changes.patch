@@ -1,0 +1,165 @@
+diff --git a/sicnav/utils/mpc_utils/orca_c_wrapper.py b/sicnav/utils/mpc_utils/orca_c_wrapper.py
+index 3573c33..eaf2848 100644
+--- a/sicnav/utils/mpc_utils/orca_c_wrapper.py
++++ b/sicnav/utils/mpc_utils/orca_c_wrapper.py
+@@ -123,7 +123,9 @@ class ORCACWrapper(Callback):
+         X_hums = X[self.nx_r+self.np_g:]
+ 
+         # Set robot's position now and velocity at prev. time step (ie vel now)
+-        rob_lin_vel = (X[3]*np.cos(X[2]), X[3]*np.sin(X[2]))
++        # diffusion SICNav robot state:
++        # X[2]=sin(theta), X[3]=cos(theta), X[4]=linear velocity
++        rob_lin_vel = (X[4]*X[3], X[4]*X[2])
+         self.sim.setAgentPosition(0, (float(X[0]), float(X[1])))
+         self.sim.setAgentVelocity(0, rob_lin_vel)
+         # The simulation is unaware of the robot's preferred velocity
+diff --git a/sicnav_diffusion/JMID/MID/mid.py b/sicnav_diffusion/JMID/MID/mid.py
+index ac3daef..b84fbce 100755
+--- a/sicnav_diffusion/JMID/MID/mid.py
++++ b/sicnav_diffusion/JMID/MID/mid.py
+@@ -1593,7 +1593,13 @@ class MID:
+         return row_ind, col_ind
+ 
+     def _add_mean(self, data, node):
+-        data = data + np.expand_dims(node.get_mean_x_and_y(), axis=0)
++        mean_xy = torch.as_tensor(
++            node.get_mean_x_and_y(),
++            dtype=data.dtype,
++            device=data.device
++        ).unsqueeze(0)
++
++        data = data + mean_xy
+         return data
+ 
+     def _unnormalize_pixels(self, data, normalized_px, img_width=0, img_height=0):
+diff --git a/sicnav_diffusion/policy/sicnav_acados.py b/sicnav_diffusion/policy/sicnav_acados.py
+index 7009174..d67b3a0 100644
+--- a/sicnav_diffusion/policy/sicnav_acados.py
++++ b/sicnav_diffusion/policy/sicnav_acados.py
+@@ -1007,15 +1007,27 @@ class SICNavAcados(Policy):
+     # Overwrite set_env to also configure the policy's env-related values
+     def set_env(self, env, file_run_id=None):
+         super().set_env(env)
++
++        # REAL-TIME DEPLOYMENT:
++        # README: enable this when using SICNav on a robot in real time.
++        self.outdoor_robot_setting = True
++
+         env.set_human_observability(False)
+         tot_time = env.time_limit
+         self.time_step = env.time_step
+-        self.rate = 1.0 / self.time_step # rate of the mpc solver, i.e. how many times it runs per second this can be different from the env discretization time step when running on a real robot
++        # REAL-TIME DEPLOYMENT:
++        # controller replanning rate; independent of MPC discretization time_step.
++        self.rate = 10.0
+ 
+         _ = env.reset() # to ensure that static obstacles are created as an object.
+ 
+         init_start_time = time.time()
+         env_config = env.config
++
++        # REAL-TIME DEPLOYMENT:
++        # MPCEnv reads outdoor_robot_setting from env.wild.
++        env_config.set('env', 'wild', 'true')
++
+         policy_config = self.config
+         sim_env = env
+         self.time_step = env_config.getfloat('env', 'time_step')
+@@ -1070,13 +1082,29 @@ class SICNavAcados(Policy):
+             'config' : policy_config,
+             'env_config' : env_config,
+         }
+-        self.mpc_env = MPCEnv(self.time_step, dummy_state, self.num_hums, self.horiz, policy_config, env_config, isSim=True)
++        self.mpc_env = MPCEnv(
++            self.time_step,
++            dummy_state,
++            self.num_hums,
++            self.horiz,
++            policy_config,
++            env_config,
++            isSim=False,
++            rate=self.rate,
++        )
+ 
++        print("[REALTIME] policy outdoor_robot_setting =", self.outdoor_robot_setting)
++        print("[REALTIME] MPCEnv outdoor_robot_setting =", self.mpc_env.outdoor_robot_setting)
++        print("[REALTIME] MPCEnv isSim =", self.mpc_env.isSim)
++        print("[REALTIME] controller rate =", self.rate)
+ 
+ 
+ 
+-        self.warmstart = True
+-        if self.mpc_env.hum_model == 'orca_casadi_kkt':
++
++        # TEMP: disable BlockSQP/MA27 warmstart because HSL is unavailable
++        self.warmstart = False
++
++        if self.mpc_env.hum_model == 'orca_casadi_kkt' and self.warmstart:
+             self.init_warmstart_solver()
+         self.reuse_K = self.horiz
+ 
+@@ -1489,7 +1517,7 @@ class SICNavAcados(Policy):
+                 self.num_prev_used += 1
+             else:
+                 debug_text2 = " EMER. BRAKE"
+-                cur_vel = x_guess[3, 0]
++                cur_vel = x_guess[4, 0]
+                 actions = []
+                 rob_states = [np.atleast_2d(x_guess[:, 0]).T]
+                 f_still_moving = True
+@@ -1503,7 +1531,29 @@ class SICNavAcados(Policy):
+                     prev_state = rob_states[count-1]
+                     next_action = np.array([lowest_feasible_vel, 0.0]+[0.0 for _ in range(self.mpc_env.nVars_hums)]+[0.0 for _ in range(self.mpc_env.nLambda)])
+                     actions.append(next_action)
+-                    next_state = self.mpc_env.system_model.f_func_nonlin(prev_state, next_action).toarray()
++                    if self.mpc_env.human_pred_MID:
++                        mid_idx = min(count - 1, MID_samples.shape[0] - 2)
++
++                        MID_sample_t = MID_samples[mid_idx, :, :]
++                        MID_sample_tp1 = MID_samples[mid_idx + 1, :, :]
++
++                        stacked_preds = np.hstack([
++                            MID_sample_t[:, 0],
++                            MID_sample_t[:, 1],
++                            MID_sample_tp1[:, 0],
++                            MID_sample_tp1[:, 1]
++                        ]).reshape(-1, 1)
++
++                        next_state = self.mpc_env.system_model.f_func_nonlin(
++                            prev_state,
++                            next_action,
++                            stacked_preds
++                        ).toarray()
++                    else:
++                        next_state = self.mpc_env.system_model.f_func_nonlin(
++                            prev_state,
++                            next_action
++                        ).toarray()
+                     rob_states.append(next_state)
+                     cur_vel = lowest_feasible_vel
+                     f_still_moving = lowest_feasible_vel - 0.0 > 1e-10
+@@ -1512,9 +1562,9 @@ class SICNavAcados(Policy):
+ 
+                 u_val = np.concatenate([np.atleast_2d(action).T for action in actions]+
+                                     [np.tile(np.atleast_2d(next_action).T, (1, self.horiz-len(actions)))], -1)
+-                if self.mpc_env.hum_model == 'orca_casadi_kkt':
+-                    u_val_hums = u_val[self.mpc_env.nu_r:, :K_orca]
+-                    u_val = np.vstack([u_val[:, :], u_val_hums])
++                #if self.mpc_env.hum_model == 'orca_casadi_kkt':
++                #    u_val_hums = u_val[self.mpc_env.nu_r:, :K_orca]
++                #    u_val = np.vstack([u_val[:, :], u_val_hums])
+                 x_val_noorca = np.concatenate([rob_state for rob_state in rob_states]+
+                                     [np.tile(next_state, (1, self.horiz-len(actions)))], -1)
+                 x_val_hums = x_guess[self.mpc_env.nx_r+self.mpc_env.np_g:,:]
+diff --git a/sicnav_diffusion/utils/mpc_utils/mpc_env_new.py b/sicnav_diffusion/utils/mpc_utils/mpc_env_new.py
+index b09f92d..6953148 100644
+--- a/sicnav_diffusion/utils/mpc_utils/mpc_env_new.py
++++ b/sicnav_diffusion/utils/mpc_utils/mpc_env_new.py
+@@ -299,6 +299,7 @@ class MPCEnv(object):
+         # read buffer_env and read buffer_pol and strip of all whitespace and strip \n and strip = and then append to eachother
+         self.config_str = buffer_env.getvalue().replace(' ', '').replace('\n', '').replace('=', '') + buffer_pol.getvalue().replace(' ', '').replace('\n', '').replace('=', '')
+         self.config_hash = hashlib.md5(self.config_str.encode()).hexdigest()
++        print("[MPCEnv] CONFIG HASH =", self.config_hash)
+ 
+         if env_config is not None:
+             self.env_config = env_config
